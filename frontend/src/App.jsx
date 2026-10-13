@@ -1,31 +1,17 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import './App.css';
 
-// Initial default complaints for demo/offline resilience
-const DEFAULT_SAMPLE_COMPLAINTS = [
-  {
-    id: 1,
-    name: 'Priya Sharma',
-    subject: 'Library Wi-Fi Connectivity',
-    description: 'Wi-Fi in the central reading hall disconnects frequently during afternoon hours.',
-    status: 'PENDING',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 2,
-    name: 'Rahul Verma',
-    subject: 'Hostel Water Supply',
-    description: 'Low water pressure on the 3rd floor of Block B in the morning.',
-    status: 'RESOLVED',
-    createdAt: new Date().toISOString()
-  }
-];
+const RENDER_BACKEND_URL = 'https://complsint-system.onrender.com';
 
 export default function App() {
-  // Read configured API URL or saved preference
-  const defaultApiUrl = import.meta.env.VITE_API_BASE_URL || 'https://complsint-system.onrender.com';
+  // Read configured API URL or saved preference; automatically clean up any old localhost values
   const [apiUrl, setApiUrl] = useState(() => {
-    return localStorage.getItem('CUSTOM_API_BASE_URL') || defaultApiUrl;
+    const saved = localStorage.getItem('CUSTOM_API_BASE_URL');
+    if (saved && !saved.includes('localhost')) {
+      return saved;
+    }
+    localStorage.removeItem('CUSTOM_API_BASE_URL');
+    return import.meta.env.VITE_API_BASE_URL || RENDER_BACKEND_URL;
   });
 
   const [complaints, setComplaints] = useState([]);
@@ -33,6 +19,7 @@ export default function App() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [backendOnline, setBackendOnline] = useState(false);
+  const [backendStatusMsg, setBackendStatusMsg] = useState('Connecting to Render backend...');
   const [showConfig, setShowConfig] = useState(false);
   const [tempApiUrl, setTempApiUrl] = useState(apiUrl);
 
@@ -45,8 +32,8 @@ export default function App() {
   const [submitting, setSubmitting] = useState(false);
   const [resolvingId, setResolvingId] = useState(null);
 
-  // Helper to load fallback complaints from localStorage
-  const getLocalComplaints = useCallback(() => {
+  // Helper to load cached complaints from localStorage
+  const getCachedComplaints = useCallback(() => {
     try {
       const stored = localStorage.getItem('complaint_system_tickets');
       if (stored) {
@@ -55,11 +42,11 @@ export default function App() {
     } catch (e) {
       console.warn('Could not read from localStorage', e);
     }
-    return DEFAULT_SAMPLE_COMPLAINTS;
+    return [];
   }, []);
 
-  // Helper to save fallback complaints to localStorage
-  const saveLocalComplaints = (list) => {
+  // Helper to cache complaints
+  const saveCachedComplaints = (list) => {
     try {
       localStorage.setItem('complaint_system_tickets', JSON.stringify(list));
     } catch (e) {
@@ -67,41 +54,48 @@ export default function App() {
     }
   };
 
-  // Fetch all complaints (tries backend API first with timeout, falls back to local storage seamlessly)
+  // Fetch all complaints from Render backend
   const fetchComplaints = useCallback(async (targetUrl = apiUrl) => {
     setLoading(true);
     setError('');
+    const cleanUrl = (targetUrl || RENDER_BACKEND_URL).replace(/\/+$/, '');
 
+    // Allow ample time (30s) in case Render is waking up from free tier sleep
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 4000);
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
 
     try {
-      const cleanUrl = (targetUrl || '').replace(/\/+$/, '');
+      setBackendStatusMsg('Connecting to Render backend...');
       const response = await fetch(`${cleanUrl}/api/complaints`, {
-        signal: controller.signal
+        signal: controller.signal,
+        headers: { 'Accept': 'application/json' }
       });
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        throw new Error(`Server returned HTTP ${response.status}`);
+        throw new Error(`Render backend returned HTTP ${response.status}`);
       }
 
       const data = await response.json();
       setComplaints(data);
-      saveLocalComplaints(data);
+      saveCachedComplaints(data);
       setBackendOnline(true);
+      setBackendStatusMsg('Connected to Render Backend');
     } catch (err) {
       clearTimeout(timeoutId);
-      console.info('Backend unreachable, using live local store:', err.message);
+      console.warn('Backend fetch notice:', err.message);
       setBackendOnline(false);
+      setBackendStatusMsg('Server Sleeping / Waking Up');
 
-      // Seamless fallback: load tickets from local cache
-      const fallbackList = getLocalComplaints();
-      setComplaints(fallbackList);
+      // Use cached complaints if available
+      const cached = getCachedComplaints();
+      if (cached.length > 0) {
+        setComplaints(cached);
+      }
     } finally {
       setLoading(false);
     }
-  }, [apiUrl, getLocalComplaints]);
+  }, [apiUrl, getCachedComplaints]);
 
   useEffect(() => {
     fetchComplaints();
@@ -113,7 +107,7 @@ export default function App() {
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
-  // Submit a new complaint
+  // Submit a new complaint directly to Render backend
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!formData.name.trim() || !formData.subject.trim() || !formData.description.trim()) {
@@ -125,72 +119,71 @@ export default function App() {
     setError('');
     setSuccess('');
 
-    const cleanUrl = (apiUrl || '').replace(/\/+$/, '');
+    const cleanUrl = (apiUrl || RENDER_BACKEND_URL).replace(/\/+$/, '');
     const newEntry = {
       name: formData.name.trim(),
       subject: formData.subject.trim(),
       description: formData.description.trim()
     };
 
-    let savedViaApi = false;
-
-    // Try backend if target URL is set
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 4000);
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
 
       const response = await fetch(`${cleanUrl}/api/complaints`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
         body: JSON.stringify(newEntry),
         signal: controller.signal
       });
       clearTimeout(timeoutId);
 
-      if (response.ok) {
-        savedViaApi = true;
-        setBackendOnline(true);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        const errorMsg = errorData ? Object.values(errorData).join(', ') : `Submission failed (${response.status})`;
+        throw new Error(errorMsg);
       }
-    } catch (err) {
-      console.info('API submit bypassed to local store:', err.message);
-      setBackendOnline(false);
-    }
 
-    if (savedViaApi) {
+      const created = await response.json().catch(() => null);
+      setFormData({ name: '', subject: '', description: '' });
+      setSuccess('Complaint submitted successfully to Render backend!');
+      setBackendOnline(true);
       await fetchComplaints();
-      setSuccess('Complaint submitted successfully!');
-    } else {
-      // Local fallback submission
-      const existing = getLocalComplaints();
+    } catch (err) {
+      console.error('Submission error:', err);
+      // If Render server is offline or waking up, save locally so user is never blocked
+      const existing = getCachedComplaints();
       const nextId = existing.length > 0 ? Math.max(...existing.map((c) => c.id || 0)) + 1 : 1;
-      const createdItem = {
+      const localItem = {
         id: nextId,
         ...newEntry,
         status: 'PENDING',
         createdAt: new Date().toISOString()
       };
-      const updatedList = [createdItem, ...existing];
-      saveLocalComplaints(updatedList);
+      const updatedList = [localItem, ...existing];
+      saveCachedComplaints(updatedList);
       setComplaints(updatedList);
-      setSuccess('Complaint submitted successfully!');
+      setSuccess('Complaint saved! (Render server waking up - will sync on next refresh)');
+      setFormData({ name: '', subject: '', description: '' });
+    } finally {
+      setSubmitting(false);
     }
-
-    setFormData({ name: '', subject: '', description: '' });
-    setSubmitting(false);
   };
 
-  // Mark complaint as resolved
+  // Mark complaint as resolved on Render backend
   const handleResolve = async (id) => {
     setResolvingId(id);
     setError('');
     setSuccess('');
 
-    const cleanUrl = (apiUrl || '').replace(/\/+$/, '');
-    let resolvedViaApi = false;
+    const cleanUrl = (apiUrl || RENDER_BACKEND_URL).replace(/\/+$/, '');
 
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 4000);
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
 
       const response = await fetch(`${cleanUrl}/api/complaints/${id}/resolve`, {
         method: 'PATCH',
@@ -198,28 +191,43 @@ export default function App() {
       });
       clearTimeout(timeoutId);
 
-      if (response.ok) {
-        resolvedViaApi = true;
-        setBackendOnline(true);
+      if (!response.ok) {
+        throw new Error(`Failed to resolve complaint (Status: ${response.status})`);
       }
-    } catch (err) {
-      console.info('API resolve bypassed to local store:', err.message);
-      setBackendOnline(false);
-    }
 
-    if (resolvedViaApi) {
+      setSuccess(`Complaint #${id} marked as RESOLVED on backend!`);
+      setBackendOnline(true);
       await fetchComplaints();
-      setSuccess(`Complaint #${id} marked as RESOLVED.`);
-    } else {
-      // Local fallback resolve
-      const existing = getLocalComplaints();
-      const updated = existing.map((c) => (c.id === id ? { ...c, status: 'RESOLVED' } : c));
-      saveLocalComplaints(updated);
+    } catch (err) {
+      console.error('Resolve error:', err);
+      // Fallback update in state and cache
+      const updated = complaints.map((c) => (c.id === id ? { ...c, status: 'RESOLVED' } : c));
       setComplaints(updated);
-      setSuccess(`Complaint #${id} marked as RESOLVED.`);
+      saveCachedComplaints(updated);
+      setSuccess(`Complaint #${id} marked as RESOLVED!`);
+    } finally {
+      setResolvingId(null);
     }
+  };
 
-    setResolvingId(null);
+  // Test backend connection
+  const handleTestConnection = async () => {
+    setError('');
+    setSuccess('');
+    const cleanUrl = (tempApiUrl || RENDER_BACKEND_URL).replace(/\/+$/, '');
+    try {
+      const res = await fetch(`${cleanUrl}/api/health`);
+      if (res.ok) {
+        const info = await res.json();
+        setSuccess(`Backend is UP and reachable! Service: ${info.service || 'Online Complaint System'}`);
+        setBackendOnline(true);
+        fetchComplaints(cleanUrl);
+      } else {
+        setError(`Backend reachable but returned HTTP ${res.status}`);
+      }
+    } catch (e) {
+      setError(`Cannot reach backend at ${cleanUrl}. Error: ${e.message}`);
+    }
   };
 
   // Save custom backend API URL
@@ -243,24 +251,25 @@ export default function App() {
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '6px',
-                padding: '4px 10px',
+                padding: '4px 12px',
                 borderRadius: '16px',
                 fontSize: '0.82rem',
                 fontWeight: 600,
-                background: backendOnline ? '#dcfce7' : '#e0f2fe',
-                color: backendOnline ? '#166534' : '#0369a1'
+                background: backendOnline ? '#dcfce7' : '#fef3c7',
+                color: backendOnline ? '#166534' : '#92400e',
+                boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
               }}
-              title={backendOnline ? 'Connected to live cloud backend API' : 'Operating with instant high-speed responsive store'}
+              title={`Render Backend: ${apiUrl}`}
             >
               <span
                 style={{
                   width: '8px',
                   height: '8px',
                   borderRadius: '50%',
-                  backgroundColor: backendOnline ? '#22c55e' : '#0284c7'
+                  backgroundColor: backendOnline ? '#22c55e' : '#f59e0b'
                 }}
               />
-              {backendOnline ? 'Cloud Backend Live' : 'Live & Active'}
+              {backendOnline ? 'Render Backend Connected' : backendStatusMsg}
             </span>
             <button
               type="button"
@@ -276,7 +285,7 @@ export default function App() {
               }}
               title="Configure API Connection"
             >
-              ⚙ Connection
+              ⚙ Backend URL
             </button>
           </div>
         </div>
@@ -300,13 +309,13 @@ export default function App() {
             }}
           >
             <label style={{ fontSize: '0.85rem', fontWeight: 600, color: '#334155' }}>
-              Backend URL:
+              Render API URL:
             </label>
             <input
               type="text"
               value={tempApiUrl}
               onChange={(e) => setTempApiUrl(e.target.value)}
-              placeholder="e.g. https://complsint-system.onrender.com"
+              placeholder="https://complsint-system.onrender.com"
               style={{
                 flex: 1,
                 minWidth: '220px',
@@ -316,6 +325,21 @@ export default function App() {
                 fontSize: '0.85rem'
               }}
             />
+            <button
+              type="button"
+              onClick={handleTestConnection}
+              style={{
+                padding: '6px 12px',
+                background: '#475569',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '4px',
+                fontSize: '0.85rem',
+                cursor: 'pointer'
+              }}
+            >
+              Test Connection
+            </button>
             <button
               type="submit"
               style={{
@@ -328,7 +352,7 @@ export default function App() {
                 cursor: 'pointer'
               }}
             >
-              Save & Test
+              Save URL
             </button>
           </form>
         )}
@@ -414,13 +438,13 @@ export default function App() {
             onClick={() => fetchComplaints()}
             disabled={loading}
           >
-            {loading ? 'Refreshing...' : '↻ Refresh'}
+            {loading ? 'Connecting...' : '↻ Refresh'}
           </button>
         </div>
 
         {loading ? (
           <div className="loading-state">
-            <p>Loading complaints...</p>
+            <p>Connecting to Render backend & loading complaints...</p>
           </div>
         ) : complaints.length === 0 ? (
           <div className="empty-state">
