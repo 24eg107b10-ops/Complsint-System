@@ -40,10 +40,17 @@ public class ComplaintManagementApplication {
                     }
                 }
 
-                registry.addMapping("/api/**")
-                        .allowedOrigins(origins.toArray(new String[0]))
-                        .allowedMethods("GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS")
-                        .allowedHeaders("*");
+                if (configuredCorsOrigin != null && configuredCorsOrigin.contains("*")) {
+                    registry.addMapping("/api/**")
+                            .allowedOriginPatterns("*")
+                            .allowedMethods("GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS")
+                            .allowedHeaders("*");
+                } else {
+                    registry.addMapping("/api/**")
+                            .allowedOrigins(origins.toArray(new String[0]))
+                            .allowedMethods("GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS")
+                            .allowedHeaders("*");
+                }
             }
         };
     }

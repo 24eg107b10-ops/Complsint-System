@@ -1,15 +1,18 @@
 services:
   - type: web
     name: complaint-backend
-    env: java
-    region: oregon
+    env: docker
+    dockerfilePath: ./Dockerfile
     plan: free
-    rootDir: backend
-    buildCommand: ./mvnw clean package -DskipTests
-    startCommand: java -jar target/complaint-management-0.0.1-SNAPSHOT.jar
+    region: oregon
     envVars:
-      SPRING_DATASOURCE_URL: "jdbc:mysql://HOST:PORT/DATABASE?useSSL=true&allowPublicKeyRetrieval=true&serverTimezone=UTC"
-      SPRING_DATASOURCE_USERNAME: "root"
-      SPRING_DATASOURCE_PASSWORD: "root"
-      SPRING_JPA_HIBERNATE_DDL_AUTO: "update"
-      APP_CORS_ALLOWED_ORIGIN: "<VERCEL_FRONTEND_URL>"
+      - key: SPRING_DATASOURCE_URL
+        value: "jdbc:h2:file:./data/complaint_db;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE"
+      - key: SPRING_DATASOURCE_USERNAME
+        value: "sa"
+      - key: SPRING_DATASOURCE_PASSWORD
+        value: ""
+      - key: SPRING_JPA_HIBERNATE_DDL_AUTO
+        value: "update"
+      - key: APP_CORS_ALLOWED_ORIGIN
+        value: "*"
